@@ -10,7 +10,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
 import java.util.Collection;
+import java.util.Date;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.*;
@@ -107,6 +110,7 @@ public class Transformer {
   private ExecutorService writers;
 
   private Options options = new Options();
+  private Date startTime;
 
   public static void main(String[] args) throws ParseException {
     Transformer transformer = new Transformer();
@@ -206,6 +210,7 @@ public class Transformer {
   }
 
   private void transferToSQLFiles() {
+    startTime = new Date();
     startReader();
     startWriter();
     close();
@@ -214,6 +219,31 @@ public class Transformer {
   private void close() {
     readers.shutdown();
     writers.shutdown();
+    try {
+      while (!readers.awaitTermination(1, TimeUnit.SECONDS) ||
+              !writers.awaitTermination(1, TimeUnit.SECONDS)) {}
+        writeMetaData();
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+  }
+
+  private void writeMetaData() {
+    try(BufferedWriter writer = Files.newBufferedWriter(Paths.get(OUTPUT_DIR + "metadata"))) {
+      SimpleDateFormat format = new SimpleDateFormat("YYYY-MM-dd HH:mm:ss");
+      String startStr = "Started dump at: " + format.format(startTime);
+      String endStr = "Finished dump at: " + format.format(new Date());
+      System.out.println("Writing metadata:");
+      System.out.println(startStr);
+      System.out.println(endStr);
+      writer.write(startStr);
+      writer.newLine();
+      writer.write(endStr);
+      writer.newLine();
+      writer.flush();
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
   }
 
   private void startReader() {
