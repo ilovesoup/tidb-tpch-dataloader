@@ -126,14 +126,16 @@ public class Transformer {
       transformer.MAX_BYTES_PER_FILE = MB * Long.parseLong(cmd.getOptionValue("chunkFileSize"));
     }
     if (cmd.hasOption("outputDir")) {
-      transformer.OUTPUT_DIR = cmd.getOptionValue("outputDir");
+      String dir = cmd.getOptionValue("outputDir");
+      transformer.OUTPUT_DIR = dir.endsWith("/") ? dir : dir + "/";
       System.out.println("Output dir:\t" + transformer.OUTPUT_DIR);
     } else {
       System.out.println("You must specify -outputDir.");
       System.exit(0);
     }
     if (cmd.hasOption("tpchDir")) {
-      transformer.TPCH_DIR = cmd.getOptionValue("tpchDir");
+      String dir = cmd.getOptionValue("tpchDir");
+      transformer.TPCH_DIR = dir.endsWith("/") ? dir : dir + "/";
       System.out.println("TPCH data dir:\t" + transformer.TPCH_DIR);
     } else {
       System.out.println("You must specify -tpchDir.");
@@ -222,15 +224,16 @@ public class Transformer {
     writers.shutdown();
     try {
       while (!readers.awaitTermination(1, TimeUnit.SECONDS) ||
-              !writers.awaitTermination(1, TimeUnit.SECONDS)) {}
-        writeMetaData();
+          !writers.awaitTermination(1, TimeUnit.SECONDS)) {
+      }
+      writeMetaData();
     } catch (Exception e) {
       e.printStackTrace();
     }
   }
 
   private void writeMetaData() {
-    try(BufferedWriter writer = Files.newBufferedWriter(Paths.get(OUTPUT_DIR + "metadata"))) {
+    try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(OUTPUT_DIR + "metadata"))) {
       SimpleDateFormat format = new SimpleDateFormat("YYYY-MM-dd HH:mm:ss");
       String startStr = "Started dump at: " + format.format(startTime);
       String endStr = "Finished dump at: " + format.format(new Date());
