@@ -101,7 +101,8 @@ public class Transformer {
   private String TPCH_DIR = "";
   private String OUTPUT_DIR = "";
   private int MAX_ROWS_COUNT = 10000;
-  private long MAX_BYTES_PER_FILE = 100 * 1024 * 1024; // Default to 100MB
+  private static final long MB = 1024 * 1024;
+  private long MAX_BYTES_PER_FILE = 100 * MB; // Default to 100MB
 
   private Collection<File> sources;
   private Map<String, Context> contextMap = new ConcurrentHashMap<>();
@@ -122,7 +123,7 @@ public class Transformer {
       System.exit(0);
     }
     if (cmd.hasOption("chunkFileSize")) {
-      transformer.MAX_BYTES_PER_FILE = Long.parseLong(cmd.getOptionValue("chunkFileSize"));
+      transformer.MAX_BYTES_PER_FILE = MB * Long.parseLong(cmd.getOptionValue("chunkFileSize"));
     }
     if (cmd.hasOption("outputDir")) {
       transformer.OUTPUT_DIR = cmd.getOptionValue("outputDir");
