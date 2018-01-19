@@ -38,13 +38,14 @@ public class Transformer {
     private volatile Status status;
     private String dbName = "tpch";
 
-    Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status) {
+    Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName) {
       this.inputFileName = inputFileName;
       MAX_BYTES_PER_FILE = max_bytes_per_file;
       this.dataQueue = queue;
       this.status = status;
       writeFileIdx = new AtomicInteger(1);
       bytesWrite = new AtomicLong(0);
+      this.dbName = dbName;
     }
 
     void setCurrentWriteFile(String currentWriteFile) {
@@ -216,7 +217,8 @@ public class Transformer {
                       name,
                       MAX_BYTES_PER_FILE,
                       new LinkedBlockingQueue<>(Math.min(MAX_ROWS_COUNT, 100000)),
-                      Context.Status.INITIAL
+                      Context.Status.INITIAL,
+                      dbName
                   )
               ));
     }
