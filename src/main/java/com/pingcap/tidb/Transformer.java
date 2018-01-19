@@ -36,6 +36,7 @@ public class Transformer {
     private volatile AtomicLong bytesWrite;
     private volatile BlockingQueue<String[]> dataQueue;
     private volatile Status status;
+    private String dbName = "tpch";
 
     Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status) {
       this.inputFileName = inputFileName;
@@ -67,7 +68,11 @@ public class Transformer {
     }
 
     String getDBName() {
-      return "tpch";
+      return dbName;
+    }
+
+    public void setDbName(String dbName) {
+      this.dbName = dbName;
     }
 
     String getTableName() {
@@ -112,6 +117,7 @@ public class Transformer {
 
   private Options options = new Options();
   private Date startTime;
+  private String dbName = "tpch";
 
   public static void main(String[] args) throws ParseException {
     Transformer transformer = new Transformer();
@@ -144,6 +150,9 @@ public class Transformer {
     if (cmd.hasOption("rowCount")) {
       transformer.MAX_ROWS_COUNT = Integer.parseInt(cmd.getOptionValue("rowCount"));
     }
+    if (cmd.hasOption("dbName")) {
+      transformer.dbName = cmd.getOptionValue("dbName");
+    }
     int readers = 2;
     int writers = 2;
     if (cmd.hasOption("readers")) {
@@ -175,6 +184,7 @@ public class Transformer {
     options.addOption("chunkFileSize", true, "Split tables into chunks of this output file size. This value is in MB.");
     options.addOption("readers", true, "Reader thread count.(one thread per file)");
     options.addOption("writers", true, "Writer thread count.(one thread per file)");
+    options.addOption("dbName", true, "Database name:tpch/tpch_idx");
   }
 
   public Options getOptions() {
