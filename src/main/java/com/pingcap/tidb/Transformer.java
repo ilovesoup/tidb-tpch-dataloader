@@ -126,7 +126,7 @@ public class Transformer {
     CommandLine cmd = parser.parse(transformer.getOptions(), args);
     if (cmd.hasOption("help") || args.length <= 0) {
       HelpFormatter formatter = new HelpFormatter();
-      formatter.printHelp("java -jar tidb-tpch-dataloader-1.0-SNAPSHOT.jar [option]<arg>\nTPCH data transformer - CSV format to mydumper SQL files.\n", transformer.getOptions());
+      formatter.printHelp("java -jar tidb-tpch-dataloader-1.0-SNAPSHOT-jar-with-dependencies.jar [option]<arg>\nTPCH data transformer - CSV format to mydumper SQL files.\n", transformer.getOptions());
       System.exit(0);
     }
     if (cmd.hasOption("chunkFileSize")) {
