@@ -36,7 +36,7 @@ public class Transformer {
     private volatile AtomicLong bytesWrite;
     private volatile BlockingQueue<String[]> dataQueue;
     private volatile Status status;
-    private String dbName = "tpch";
+    private String dbName;
 
     Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName) {
       this.inputFileName = inputFileName;
