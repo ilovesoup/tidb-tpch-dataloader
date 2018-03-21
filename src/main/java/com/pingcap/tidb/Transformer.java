@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.Collection;
 import java.util.Date;
@@ -109,9 +108,13 @@ public class Transformer {
   private int MAX_ROWS_COUNT = 10000;
   private static final long MB = 1024 * 1024;
   private long MAX_BYTES_PER_FILE = 100 * MB; // Default to 100MB
+  private int numReaders;
+  private int numWriters;
 
   private Collection<File> sources;
   private Map<String, Context> contextMap = new ConcurrentHashMap<>();
+  private BlockingQueue<Context> readingCtxQueue = new LinkedBlockingDeque<>();
+  private CountDownLatch writerLatch;
 
   private ExecutorService readers;
   private ExecutorService writers;
@@ -195,6 +198,8 @@ public class Transformer {
   private void initReaderWriter(int reader, int writer) {
     readers = Executors.newFixedThreadPool(reader);
     writers = Executors.newFixedThreadPool(writer);
+    numReaders = reader;
+    numWriters = writer;
   }
 
   private void prepareDataFiles() {
@@ -203,9 +208,10 @@ public class Transformer {
 
   private void verifyData() {
     if (sources == null || sources.size() != 8) {
-      throw new IllegalStateException("Data has not been loaded properly");
+      throw new IllegalStateException("TPCH Data has not been loaded properly");
     } else {
       sources.stream().map(File::getName).forEach(System.out::println);
+      writerLatch = new CountDownLatch(sources.size());
       System.out.println("Successfully detected " + sources.size() + " files.");
       System.out.println("------------------------------------------------");
 
@@ -268,11 +274,12 @@ public class Transformer {
       String fileName = file.getName();
       Path path = Paths.get(absPath);
       readers.submit(() -> {
-        int readCnt = 0;
+        long readCnt = 0;
         Context ctx = contextMap.get(fileName);
         Objects.requireNonNull(ctx);
         try (BufferedReader reader = Files.newBufferedReader(path)) {
           ctx.setStatus(Context.Status.READING);
+          readingCtxQueue.add(ctx);
           String currentLine;
           long start = System.currentTimeMillis();
           while ((currentLine = reader.readLine()) != null) {
@@ -291,11 +298,27 @@ public class Transformer {
     });
   }
 
+  private static final Object CTX_LOCK = new Object();
+
+  private Context nextCtx2Write() {
+    synchronized (CTX_LOCK) {
+      if (writerLatch.getCount() > 0) {
+        writerLatch.countDown();
+        try {
+          return readingCtxQueue.take();
+        } catch (InterruptedException e) {
+          e.printStackTrace();
+        }
+      }
+      return null;
+    }
+  }
+
   private void startWriter() {
-    sources.stream()
-        .map(File::getName)
-        .forEach(fileName -> writers.submit(() -> {
-          Context ctx = contextMap.get(fileName);
+    for (int num = 0; num < numWriters; num++) {
+      writers.submit(() -> {
+        Context ctx;
+        while ((ctx = nextCtx2Write()) != null) {
           while (!ctx.isEmpty()) {
             try (BufferedWriter writer = getFileBufferedWriter(ctx)) {
               writer.write("/*!40101 SET NAMES binary*/;\n" +
@@ -306,28 +329,9 @@ public class Transformer {
                 if (ctx.isEmpty() || ctx.needProceedNextFile()) {
                   break;
                 }
+                String result = getWriteContext(ctx, writer);
+                if (result == null) continue;
 
-                StringBuilder builder = new StringBuilder();
-                for (int i = 0; i < MAX_ROWS_COUNT; i++) {
-                  if (i == 0) {
-                    writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
-                  }
-                  // append insert values
-                  builder.append("(\"")
-                      .append(String.join("\",\"", ctx.getDataQueue().take()))
-                      .append("\")");
-
-                  if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
-                    builder.append(";");
-                    break;
-                  } else {
-                    builder.append(",");
-                  }
-                }
-                if (builder.length() <= 0) {
-                  continue;
-                }
-                String result = builder.toString();
                 ctx.incBytesWrite(result.length());
                 writer.write(result);
                 writer.newLine();
@@ -339,7 +343,34 @@ public class Transformer {
               e.printStackTrace();
             }
           }
-        }));
+          System.out.println("Successfully processed " + ctx.getTableName());
+        }
+      });
+    }
+  }
+
+  private String getWriteContext(Context ctx, BufferedWriter writer) throws IOException, InterruptedException {
+    StringBuilder builder = new StringBuilder();
+    for (int i = 0; i < MAX_ROWS_COUNT; i++) {
+      if (i == 0) {
+        writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
+      }
+      // append insert values
+      builder.append("(\"")
+          .append(String.join("\",\"", ctx.getDataQueue().take()))
+          .append("\")");
+
+      if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
+        builder.append(";");
+        break;
+      } else {
+        builder.append(",");
+      }
+    }
+    if (builder.length() <= 0) {
+      return null;
+    }
+    return builder.toString();
   }
 
   private BufferedWriter getFileBufferedWriter(Context context)
