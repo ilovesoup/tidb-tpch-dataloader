@@ -36,8 +36,9 @@ public class Transformer {
     private volatile BlockingQueue<String[]> dataQueue;
     private volatile Status status;
     private String dbName;
+    private String format;
 
-    Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName) {
+    Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName, String format) {
       this.inputFileName = inputFileName;
       MAX_BYTES_PER_FILE = max_bytes_per_file;
       this.dataQueue = queue;
@@ -45,6 +46,7 @@ public class Transformer {
       writeFileIdx = new AtomicInteger(1);
       bytesWrite = new AtomicLong(0);
       this.dbName = dbName;
+      this.format = format;
     }
 
     void setCurrentWriteFile(String currentWriteFile) {
@@ -76,13 +78,13 @@ public class Transformer {
     }
 
     String getTableName() {
-      return inputFileName.replace(".tbl", "").toUpperCase();
+      return inputFileName.replace("." + format, "").toUpperCase();
     }
 
     String nextFileName() {
       return String.format("%s.%s.%09d.sql",
           getDBName(),
-          inputFileName.replace(".tbl", "").toUpperCase(),
+          inputFileName.replace("." + format, "").toUpperCase(),
           writeFileIdx.getAndIncrement());
     }
 
@@ -110,6 +112,13 @@ public class Transformer {
   private long MAX_BYTES_PER_FILE = 100 * MB; // Default to 100MB
   private int numReaders;
   private int numWriters;
+  private static final String[] sepLst = new String[]{
+      "\\|",
+      ",",
+      "\\t"
+  };
+  private String sep = sepLst[0];
+  private String format = "tbl";
 
   private Collection<File> sources;
   private Map<String, Context> contextMap = new ConcurrentHashMap<>();
@@ -157,6 +166,17 @@ public class Transformer {
     if (cmd.hasOption("dbName")) {
       transformer.dbName = cmd.getOptionValue("dbName");
     }
+    if (cmd.hasOption("format")) {
+      transformer.format = cmd.getOptionValue("format");
+    }
+    if (cmd.hasOption("separator")) {
+      int s = Integer.parseInt(cmd.getOptionValue("separator"));
+      if (s > sepLst.length - 1) {
+        System.out.println("Invalid separator option, please refer to help.");
+      } else {
+        transformer.sep = sepLst[s];
+      }
+    }
     int readers = 2;
     int writers = 2;
     if (cmd.hasOption("readers")) {
@@ -182,6 +202,8 @@ public class Transformer {
 
   private void initOptions() {
     options.addOption("help", "Print this help");
+    options.addOption("format", true, "Your csv format(like 'csv', 'tbl', etc.)");
+    options.addOption("separator", true, "Defines how csv file is separated: 0 for '|' 1 for ',' 2 for '\t'(tab)");
     options.addOption("tpchDir", true, "Directory where you place your tpch data file in.");
     options.addOption("outputDir", true, "Directory where the transformed sql files will be placed in.");
     options.addOption("rowCount", true, "How many rows per `INSERT INTO` statement.");
@@ -203,12 +225,13 @@ public class Transformer {
   }
 
   private void prepareDataFiles() {
-    sources = FileUtils.listFiles(new File(TPCH_DIR), new String[]{"tbl"}, true);
+    System.out.println("Processing " + format + " files...");
+    sources = FileUtils.listFiles(new File(TPCH_DIR), new String[]{format}, true);
   }
 
   private void verifyData() {
-    if (sources == null || sources.size() != 8) {
-      throw new IllegalStateException("TPCH Data has not been loaded properly");
+    if (sources == null) {
+      throw new IllegalStateException("Data has not been loaded properly");
     } else {
       sources.stream().map(File::getName).forEach(System.out::println);
       writerLatch = new CountDownLatch(sources.size());
@@ -224,7 +247,8 @@ public class Transformer {
                       MAX_BYTES_PER_FILE,
                       new LinkedBlockingQueue<>(Math.min(MAX_ROWS_COUNT, 100000)),
                       Context.Status.INITIAL,
-                      dbName
+                      dbName,
+                      format
                   )
               ));
     }
@@ -284,7 +308,7 @@ public class Transformer {
           long start = System.currentTimeMillis();
           while ((currentLine = reader.readLine()) != null) {
             readCnt++;
-            String[] result = currentLine.split("\\|");
+            String[] result = currentLine.split(sep);
             ctx.putData(result);
           }
           System.out.println("Finished reading " + readCnt +
@@ -352,6 +376,15 @@ public class Transformer {
   private String getWriteContext(Context ctx, BufferedWriter writer) throws IOException, InterruptedException {
     StringBuilder builder = new StringBuilder();
     for (int i = 0; i < MAX_ROWS_COUNT; i++) {
+      while (ctx.getDataQueue().isEmpty()) {
+        if (ctx.status == Context.Status.FINISHED) {
+          if (builder.length() > 0) {
+            return builder.append(";").toString();
+          } else {
+            return null;
+          }
+        }
+      }
       if (i == 0) {
         writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
       }
