@@ -1,6 +1,6 @@
-## TPCH data transferer
+## CSV data transferer
 
-Convert your TPCH CSV-like file to mydumper SQL files fast.
+Convert your CSV-like file to mydumper SQL files fast.
 
 ### Build
 `mvn clean package`
@@ -10,7 +10,7 @@ Convert your TPCH CSV-like file to mydumper SQL files fast.
 usage: java -jar
             tidb-tpch-dataloader-1.0-SNAPSHOT-jar-with-dependencies.jar
             [option]<arg>
-TPCH data transformer - CSV format to mydumper SQL files.
+CSV data transformer - CSV format to mydumper SQL files.
  -chunkFileSize <arg>   Split tables into chunks of this output file size.
                         This value is in MB.
  -dbName <arg>          Database name:tpch/tpch_idx
