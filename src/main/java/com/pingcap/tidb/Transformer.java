@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Transformer {
+  private static final Object CTX_LOCK = new Object();
 
   static class Context {
     enum Status {
@@ -315,6 +316,7 @@ public class Transformer {
               " lines from " + fileName + " using time(ms):" + (System.currentTimeMillis() - start));
         } catch (Exception e) {
           e.printStackTrace();
+          exit("Reading file " + fileName + " failed due to " + e.getMessage(), 2);
         } finally {
           ctx.setStatus(Context.Status.FINISHED);
         }
@@ -322,7 +324,10 @@ public class Transformer {
     });
   }
 
-  private static final Object CTX_LOCK = new Object();
+  private void exit(String msg, int status) {
+    System.err.println("Internal error:" + msg + ", exiting.");
+    System.exit(status);
+  }
 
   private Context nextCtx2Write() {
     synchronized (CTX_LOCK) {
@@ -332,6 +337,7 @@ public class Transformer {
           return readingCtxQueue.take();
         } catch (InterruptedException e) {
           e.printStackTrace();
+          exit(e.getMessage(), 1);
         }
       }
       return null;
@@ -365,6 +371,7 @@ public class Transformer {
               System.out.println("Finished writing file " + ctx.currentWriteFile);
             } catch (Exception e) {
               e.printStackTrace();
+              exit("Convert " + ctx.currentWriteFile + " failed due to " + e.getMessage(), 3);
             }
           }
           System.out.println("Successfully processed " + ctx.getTableName());
@@ -376,10 +383,18 @@ public class Transformer {
   private String getWriteContext(Context ctx, BufferedWriter writer) throws IOException, InterruptedException {
     StringBuilder builder = new StringBuilder();
     for (int i = 0; i < MAX_ROWS_COUNT; i++) {
+      // Check whether data queue is pending to finish.
       while (ctx.getDataQueue().isEmpty()) {
         if (ctx.status == Context.Status.FINISHED) {
           if (builder.length() > 0) {
-            return builder.append(";").toString();
+            String res = builder.toString();
+            if (res.endsWith(",")) {
+              // Replace the last
+              return res.substring(0, res.length() - 1) + ";";
+            } else {
+              // Should never reach here
+              throw new RuntimeException("Constructed insert [" + res + "] stmt is corrupted due to unknown reason");
+            }
           } else {
             return null;
           }
