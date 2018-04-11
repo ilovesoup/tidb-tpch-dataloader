@@ -11,17 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
-import java.util.Collection;
-import java.util.Date;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Transformer {
   private static final Object CTX_LOCK = new Object();
-
+  private static Map<String, int[]> tableTimestampMap = new HashMap<>();
   static class Context {
     enum Status {
       INITIAL,
@@ -38,6 +35,7 @@ public class Transformer {
     private volatile Status status;
     private String dbName;
     private String format;
+    private List<Integer> timestampColIdx;
 
     Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName, String format) {
       this.inputFileName = inputFileName;
@@ -48,6 +46,15 @@ public class Transformer {
       bytesWrite = new AtomicLong(0);
       this.dbName = dbName;
       this.format = format;
+
+      int[] tmp = tableTimestampMap.get(inputFileName);
+      if (tmp != null) {
+        timestampColIdx = new ArrayList<>();
+        for (int i : tmp) {
+          timestampColIdx.add(i);
+        }
+        Collections.sort(timestampColIdx);
+      }
     }
 
     void setCurrentWriteFile(String currentWriteFile) {
@@ -186,6 +193,29 @@ public class Transformer {
     if (cmd.hasOption("writers")) {
       writers = Integer.parseInt(cmd.getOptionValue("writers"));
     }
+    if (cmd.hasOption("literalNullCols")) {
+      String str = cmd.getOptionValue("literalNullCols");
+      // file1:[1,2,3,4]#file2:[3,4,5]
+      try {
+        String[] files = str.split("#");
+        for (String file : files) {
+          String[] parts = file.split(":");
+          assert parts.length == 2;
+          String fileName = parts[0];
+          String nullCols = parts[1];
+          String[] cols = nullCols.split(",");
+          int[] colList = new int[cols.length];
+          for (int i = 0; i < cols.length; i++) {
+            colList[i] = Integer.parseInt(cols[i].replace("[", "").replace("]", ""));
+          }
+          tableTimestampMap.put(fileName, colList);
+        }
+      } catch (Exception e) {
+        e.printStackTrace();
+        System.out.println("Invalid literalNullCols option, please refer to help.");
+        return;
+      }
+    }
 
     transformer.run(readers, writers);
   }
@@ -212,6 +242,7 @@ public class Transformer {
     options.addOption("readers", true, "Reader thread count.(one thread per file)");
     options.addOption("writers", true, "Writer thread count.(one thread per file)");
     options.addOption("dbName", true, "Database name:tpch/tpch_idx");
+    options.addOption("literalNullCols", true, "Columns to insert literal null instead of quoted \"null\"(filename1:[col1, col2, ...]#filename2...) eg. \"lineitem.csv:[1,2]#user.csv:[3,5]\"");
   }
 
   public Options getOptions() {
@@ -404,9 +435,27 @@ public class Transformer {
         writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
       }
       // append insert values
-      builder.append("(\"")
-          .append(String.join("\",\"", ctx.getDataQueue().take()))
-          .append("\")");
+      builder.append("(\"");
+      String[] data = ctx.getDataQueue().take();
+      String[] rewriteData = new String[data.length];
+      if (ctx.timestampColIdx != null) {
+        for (int j = 0; j < data.length; j++) {
+          if (ctx.timestampColIdx.contains(j)) {
+            if (data[j].equalsIgnoreCase("null")) {
+              // we do not add quota when data is literal null
+              rewriteData[j] = data[j];
+            } else {
+              rewriteData[j] = "\"" + data[j] + "\"";
+            }
+          } else {
+            rewriteData[j] = "\"" + data[j] + "\"";
+          }
+        }
+        builder.append(String.join(",", rewriteData));
+      } else {
+        builder.append(String.join("\",\"", data));
+      }
+      builder.append("\")");
 
       if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
         builder.append(";");
