@@ -435,7 +435,6 @@ public class Transformer {
         writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
       }
       // append insert values
-      builder.append("(\"");
       String[] data = ctx.getDataQueue().take();
       String[] rewriteData = new String[data.length];
       if (ctx.timestampColIdx != null) {
@@ -451,11 +450,16 @@ public class Transformer {
             rewriteData[j] = "\"" + data[j] + "\"";
           }
         }
-        builder.append(String.join(",", rewriteData));
+        builder
+            .append("(")
+            .append(String.join(",", rewriteData))
+            .append(")");
       } else {
-        builder.append(String.join("\",\"", data));
+        builder
+            .append("(\"")
+            .append(String.join("\",\"", data))
+            .append("\")");
       }
-      builder.append("\")");
 
       if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
         builder.append(";");
