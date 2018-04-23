@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Transformer {
   private static final Object CTX_LOCK = new Object();
   private static Map<String, int[]> literalNullMap = new HashMap<>();
+  private static Map<String, int[]> timestampMap = new HashMap<>();
   static class Context {
     enum Status {
       INITIAL,
@@ -35,6 +36,7 @@ public class Transformer {
     private volatile Status status;
     private String dbName;
     private String format;
+    private List<Integer> literalNullColIdx;
     private List<Integer> timestampColIdx;
 
     Context(String inputFileName, long max_bytes_per_file, BlockingQueue<String[]> queue, Status status, String dbName, String format) {
@@ -48,6 +50,15 @@ public class Transformer {
       this.format = format;
 
       int[] tmp = literalNullMap.get(inputFileName);
+      if (tmp != null) {
+        literalNullColIdx = new ArrayList<>();
+        for (int i : tmp) {
+          literalNullColIdx.add(i);
+        }
+        Collections.sort(literalNullColIdx);
+      }
+
+      tmp = timestampMap.get(inputFileName);
       if (tmp != null) {
         timestampColIdx = new ArrayList<>();
         for (int i : tmp) {
@@ -115,6 +126,7 @@ public class Transformer {
 
   private String TPCH_DIR = "";
   private String OUTPUT_DIR = "";
+  private boolean NO_QUOTE = false;
   private int MAX_ROWS_COUNT = 10000;
   private static final long MB = 1024 * 1024;
   private long MAX_BYTES_PER_FILE = 100 * MB; // Default to 100MB
@@ -151,6 +163,9 @@ public class Transformer {
     }
     if (cmd.hasOption("chunkFileSize")) {
       transformer.MAX_BYTES_PER_FILE = MB * Long.parseLong(cmd.getOptionValue("chunkFileSize"));
+    }
+    if (cmd.hasOption("noquote")) {
+      transformer.NO_QUOTE = true;
     }
     if (cmd.hasOption("outputDir")) {
       String dir = cmd.getOptionValue("outputDir");
@@ -196,28 +211,37 @@ public class Transformer {
     if (cmd.hasOption("literalNullCols")) {
       String str = cmd.getOptionValue("literalNullCols");
       // file1:[1,2,3,4]#file2:[3,4,5]
-      try {
-        String[] files = str.split("#");
-        for (String file : files) {
-          String[] parts = file.split(":");
-          assert parts.length == 2;
-          String fileName = parts[0];
-          String nullCols = parts[1];
-          String[] cols = nullCols.split(",");
-          int[] colList = new int[cols.length];
-          for (int i = 0; i < cols.length; i++) {
-            colList[i] = Integer.parseInt(cols[i].replace("[", "").replace("]", ""));
-          }
-          literalNullMap.put(fileName, colList);
-        }
-      } catch (Exception e) {
-        e.printStackTrace();
-        System.out.println("Invalid literalNullCols option, please refer to help.");
-        return;
-      }
+      literalNullMap = parseColumnList(str);
+    }
+    if (cmd.hasOption("timestampCols")) {
+      String str = cmd.getOptionValue("timestampCols");
+      // file1:[1,2,3,4]#file2:[3,4,5]
+      timestampMap = parseColumnList(str);
     }
 
     transformer.run(readers, writers);
+  }
+
+  private static Map<String, int[]> parseColumnList(String opt) {
+    Map<String, int[]> resultMap = new HashMap<>();
+    try {
+      String[] files = opt.split("#");
+      for (String file : files) {
+        String[] parts = file.split(":");
+        assert parts.length == 2;
+        String fileName = parts[0];
+        String specialCols = parts[1];
+        String[] cols = specialCols.split(",");
+        int[] colList = new int[cols.length];
+        for (int i = 0; i < cols.length; i++) {
+          colList[i] = Integer.parseInt(cols[i].replace("[", "").replace("]", ""));
+        }
+        resultMap.put(fileName, colList);
+      }
+      return resultMap;
+    } catch (Exception e) {
+      throw new RuntimeException("Invalid literalNullCols option, please refer to help.", e);
+    }
   }
 
   private Transformer() {
@@ -234,6 +258,7 @@ public class Transformer {
   private void initOptions() {
     options.addOption("help", "Print this help");
     options.addOption("format", true, "Your csv format(like 'csv', 'tbl', etc.)");
+    options.addOption("noquote", false, "Add no quote around value");
     options.addOption("separator", true, "Defines how csv file is separated: 0 for '|' 1 for ',' 2 for '\t'(tab)");
     options.addOption("tpchDir", true, "Directory where you place your tpch data file in.");
     options.addOption("outputDir", true, "Directory where the transformed sql files will be placed in.");
@@ -243,6 +268,7 @@ public class Transformer {
     options.addOption("writers", true, "Writer thread count.(one thread per file)");
     options.addOption("dbName", true, "Database name:tpch/tpch_idx");
     options.addOption("literalNullCols", true, "Columns to insert literal null instead of quoted \"null\"(filename1:[col1, col2, ...]#filename2...) eg. \"lineitem.csv:[1,2]#user.csv:[3,5]\"");
+    options.addOption("timestampCols", true, "Columns to insert as timestamp (filename1:[col1, col2, ...]#filename2...) eg. \"lineitem.csv:[1,2]#user.csv:[3,5]\"");
   }
 
   public Options getOptions() {
@@ -339,6 +365,10 @@ public class Transformer {
           String currentLine;
           long start = System.currentTimeMillis();
           while ((currentLine = reader.readLine()) != null) {
+            currentLine = currentLine.trim();
+            if (currentLine.isEmpty()) {
+              continue;
+            }
             readCnt++;
             String[] result = currentLine.split(sep);
             ctx.putData(result);
@@ -434,32 +464,29 @@ public class Transformer {
       if (i == 0) {
         writer.write("INSERT INTO `" + ctx.getTableName() + "` VALUES\n");
       }
+      String quote = NO_QUOTE ? "" : "\"";
       // append insert values
       String[] data = ctx.getDataQueue().take();
       String[] rewriteData = new String[data.length];
-      if (ctx.timestampColIdx != null) {
-        for (int j = 0; j < data.length; j++) {
-          if (ctx.timestampColIdx.contains(j)) {
-            if (data[j].equalsIgnoreCase("null")) {
-              // we do not add quota when data is literal null
-              rewriteData[j] = data[j];
-            } else {
-              rewriteData[j] = "\"" + data[j] + "\"";
-            }
+
+      for (int j = 0; j < data.length; j++) {
+        if (data[j].equalsIgnoreCase("null")) {
+          if (ctx.literalNullColIdx.contains(j)) {
+            rewriteData[j] = data[j];
           } else {
-            rewriteData[j] = "\"" + data[j] + "\"";
+            rewriteData[j] = quote + data[j] + quote;
           }
+        } else if (ctx.timestampColIdx.contains(j)) {
+          rewriteData[j] = quote + convertTimestamp(data[j]) + quote;
+        } else {
+          rewriteData[j] = quote + data[j] + quote;
         }
-        builder
-            .append("(")
-            .append(String.join(",", rewriteData))
-            .append(")");
-      } else {
-        builder
-            .append("(\"")
-            .append(String.join("\",\"", data))
-            .append("\")");
       }
+      builder
+          .append("(")
+          .append(String.join(",", rewriteData))
+          .append(")");
+
 
       if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
         builder.append(";");
@@ -472,6 +499,24 @@ public class Transformer {
       return null;
     }
     return builder.toString();
+  }
+
+  private static final SimpleDateFormat df = new SimpleDateFormat("M/d/yyyy HH:mm:ss");
+  private static final SimpleDateFormat dfOut = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+  private static String convertTimestamp(String input) {
+    try {
+      int dotPos = input.indexOf(".");
+      if (dotPos != -1) {
+        input = input.substring(0, dotPos);
+      }
+      input = input.replace("\"", "");
+
+      Date d = df.parse(input);
+      return "\"" + dfOut.format(d) + "\"";
+    } catch (Exception e) {
+      throw new RuntimeException("wrong date format: " + input, e);
+    }
   }
 
   private BufferedWriter getFileBufferedWriter(Context context)
