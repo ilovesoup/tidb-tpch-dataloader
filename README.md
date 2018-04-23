@@ -24,8 +24,7 @@ TPCH data transformer - CSV format to mydumper SQL files.
  -readers <arg>           Reader thread count.(one thread per file)
  -rowCount <arg>          How many rows per `INSERT INTO` statement.
  -separator <arg>         Defines how csv file is separated: 0 for '|' 1
-                          for ',' 2 for '
-                          '(tab)
+                          for ',' 2 for '\t'(tab)
  -tpchDir <arg>           Directory where you place your data file.
  -writers <arg>           Writer thread count.(one thread per file)
 
