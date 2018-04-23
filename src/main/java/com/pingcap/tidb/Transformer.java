@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class Transformer {
   private static final Object CTX_LOCK = new Object();
-  private static Map<String, int[]> tableTimestampMap = new HashMap<>();
+  private static Map<String, int[]> literalNullMap = new HashMap<>();
   static class Context {
     enum Status {
       INITIAL,
@@ -47,7 +47,7 @@ public class Transformer {
       this.dbName = dbName;
       this.format = format;
 
-      int[] tmp = tableTimestampMap.get(inputFileName);
+      int[] tmp = literalNullMap.get(inputFileName);
       if (tmp != null) {
         timestampColIdx = new ArrayList<>();
         for (int i : tmp) {
@@ -86,13 +86,13 @@ public class Transformer {
     }
 
     String getTableName() {
-      return inputFileName.replace("." + format, "").toUpperCase();
+      return inputFileName.replace("." + format, "");
     }
 
     String nextFileName() {
       return String.format("%s.%s.%09d.sql",
           getDBName(),
-          inputFileName.replace("." + format, "").toUpperCase(),
+          getTableName(),
           writeFileIdx.getAndIncrement());
     }
 
@@ -208,7 +208,7 @@ public class Transformer {
           for (int i = 0; i < cols.length; i++) {
             colList[i] = Integer.parseInt(cols[i].replace("[", "").replace("]", ""));
           }
-          tableTimestampMap.put(fileName, colList);
+          literalNullMap.put(fileName, colList);
         }
       } catch (Exception e) {
         e.printStackTrace();
