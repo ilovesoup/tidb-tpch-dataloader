@@ -4,8 +4,14 @@ import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.StringReader;
+import java.lang.reflect.Field;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -33,7 +39,6 @@ import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.FileUtils;
 
 public class Transformer {
@@ -172,7 +177,23 @@ public class Transformer {
   private Date startTime;
   private String dbName = "tpch";
 
-  public static void main(String[] args) throws ParseException {
+  private static String getDefaultCharSet() {
+    OutputStreamWriter writer = new OutputStreamWriter(new ByteArrayOutputStream());
+    String enc = writer.getEncoding();
+    return enc;
+  }
+
+  public static void main(String[] args) throws Exception {
+    System.setProperty("file.encoding","US-ASCII");
+    Field charset = Charset.class.getDeclaredField("defaultCharset");
+    charset.setAccessible(true);
+    charset.set(null,null);
+
+    System.out.println("Default Charset=" + Charset.defaultCharset());
+    System.out.println("file.encoding=" + System.getProperty("file.encoding"));
+    System.out.println("Default Charset=" + Charset.defaultCharset());
+    System.out.println("Default Charset in Use=" + getDefaultCharSet());
+
     Transformer transformer = new Transformer();
     CommandLineParser parser = new DefaultParser();
     CommandLine cmd = parser.parse(transformer.getOptions(), args);
@@ -370,6 +391,33 @@ public class Transformer {
     }
   }
 
+  static String [] parseLine(String line, int columnSize) {
+    StringReader reader = new StringReader(line);
+    System.out.println(line);
+    CSVReader csvReader =
+        new CSVReaderBuilder(reader)
+            .withSkipLines(0)
+            .withKeepCarriageReturn(false)
+            .withMultilineLimit(1)
+            .build();
+    try {
+      String[] result = csvReader.readNext();
+      if (result == null) {
+        return new String[] {};
+      }
+      if (columnSize == -1) {
+        return result;
+      } else {
+        if (result.length != columnSize) {
+          return new String[] {};
+        }
+        return result;
+      }
+    } catch (IOException e) {
+      return new String[] {};
+    }
+  }
+
   private void startReader() {
     sources.forEach(file -> {
       String absPath = file.getAbsolutePath();
@@ -379,26 +427,27 @@ public class Transformer {
         long readCnt = 0;
         Context ctx = contextMap.get(fileName);
         Objects.requireNonNull(ctx);
-        try (BufferedReader reader = Files.newBufferedReader(path)) {
+        try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
           ctx.setStatus(Context.Status.READING);
           readingCtxQueue.add(ctx);
-
-          CSVReader csvReader =
-              new CSVReaderBuilder(reader)
-                  .withSkipLines(0)
-                  .withKeepCarriageReturn(false)
-                  .build();
-
-          String[] currentLine;
+          String line;
+          int columnSize = -1;
           long start = System.currentTimeMillis();
-          while ((currentLine = csvReader.readNext()) != null) {
+          while ((line = reader.readLine()) != null) {
+            String[] currentLine = parseLine(line, columnSize);
+            if (currentLine.length == 0) {
+              continue;
+            }
+            columnSize = currentLine.length;
             readCnt++;
+
             for (int i = 0; i < currentLine.length; i++) {
               if (currentLine[i] != null) {
                 currentLine[i] = currentLine[i].trim();
               }
             }
             ctx.putData(currentLine);
+            System.out.println("Finished reading " + readCnt + " lines from " + fileName);
           }
           System.out.println("Finished reading " + readCnt +
               " lines from " + fileName + " using time(ms):" + (System.currentTimeMillis() - start));
@@ -494,32 +543,34 @@ public class Transformer {
       String quote = NO_QUOTE ? "" : "\"";
       // append insert values
       String[] data = ctx.getDataQueue().take();
-      String[] rewriteData = new String[data.length];
+      try {
+        String[] rewriteData = new String[data.length];
 
-      for (int j = 0; j < data.length; j++) {
-        if (data[j].equalsIgnoreCase("null")) {
-          if (ctx.literalNullColIdx.contains(j)) {
-            rewriteData[j] = data[j];
+        for (int j = 0; j < data.length; j++) {
+          if (data[j].equalsIgnoreCase("null")) {
+            if (ctx.literalNullColIdx.contains(j)) {
+              rewriteData[j] = data[j];
+            } else {
+              rewriteData[j] = quote + data[j] + quote;
+            }
+          } else if (ctx.timestampColIdx.contains(j)) {
+            rewriteData[j] = quote + convertTimestamp(data[j]) + quote;
           } else {
             rewriteData[j] = quote + data[j] + quote;
           }
-        } else if (ctx.timestampColIdx.contains(j)) {
-          rewriteData[j] = quote + convertTimestamp(data[j]) + quote;
-        } else {
-          rewriteData[j] = quote + data[j] + quote;
         }
-      }
-      builder
-          .append("(")
-          .append(String.join(",", rewriteData))
-          .append(")");
-
-
-      if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
-        builder.append(";");
-        break;
-      } else {
-        builder.append(",");
+        builder
+            .append("(")
+            .append(String.join(",", rewriteData))
+            .append(")");
+        if (i == MAX_ROWS_COUNT - 1 || ctx.isEmpty()) {
+          builder.append(";");
+          break;
+        } else {
+          builder.append(",");
+        }
+      } catch (Throwable t) {
+        System.out.println(String.join(",", data));
       }
     }
     if (builder.length() <= 0) {
