@@ -1,8 +1,7 @@
 package com.pingcap.tidb;
 
-import org.apache.commons.cli.*;
-import org.apache.commons.io.FileUtils;
-
+import com.opencsv.CSVReader;
+import com.opencsv.CSVReaderBuilder;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -11,10 +10,31 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.io.FileUtils;
 
 public class Transformer {
   private static final Object CTX_LOCK = new Object();
@@ -362,16 +382,23 @@ public class Transformer {
         try (BufferedReader reader = Files.newBufferedReader(path)) {
           ctx.setStatus(Context.Status.READING);
           readingCtxQueue.add(ctx);
-          String currentLine;
+
+          CSVReader csvReader =
+              new CSVReaderBuilder(reader)
+                  .withSkipLines(0)
+                  .withKeepCarriageReturn(false)
+                  .build();
+
+          String[] currentLine;
           long start = System.currentTimeMillis();
-          while ((currentLine = reader.readLine()) != null) {
-            currentLine = currentLine.trim();
-            if (currentLine.isEmpty()) {
-              continue;
-            }
+          while ((currentLine = csvReader.readNext()) != null) {
             readCnt++;
-            String[] result = currentLine.split(sep);
-            ctx.putData(result);
+            for (int i = 0; i < currentLine.length; i++) {
+              if (currentLine[i] != null) {
+                currentLine[i] = currentLine[i].trim();
+              }
+            }
+            ctx.putData(currentLine);
           }
           System.out.println("Finished reading " + readCnt +
               " lines from " + fileName + " using time(ms):" + (System.currentTimeMillis() - start));
@@ -511,11 +538,12 @@ public class Transformer {
         input = input.substring(0, dotPos);
       }
       input = input.replace("\"", "");
+      input = input.trim();
 
       Date d = df.parse(input);
-      return "\"" + dfOut.format(d) + "\"";
+      return dfOut.format(d);
     } catch (Exception e) {
-      throw new RuntimeException("wrong date format: " + input, e);
+      throw new RuntimeException(String.format("wrong date format: [%s]", input), e);
     }
   }
 
